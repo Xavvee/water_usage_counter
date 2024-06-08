@@ -1,7 +1,29 @@
 import time
 import threading
 from machine import mem32
+from microdot import Microdot, Response
+import network
+import ujson
 
+# Konfiguracja punktu dostępu Wi-Fi
+AP_SSID = 'PicoW_Setup'
+AP_PASSWORD = '12345678'
+AP_IP = '192.168.4.1'
+AP_NETMASK = '255.255.255.0'
+AP_GATEWAY = '192.168.4.1'
+
+# Utworzenie punktu dostępu
+ap = network.WLAN(network.AP_IF)
+ap.config(essid=AP_SSID, password=AP_PASSWORD)
+ap.ifconfig((AP_IP, AP_NETMASK, AP_GATEWAY, AP_GATEWAY))
+ap.active(True)
+
+while not ap.active():
+    time.sleep(1)
+
+print('Punkt dostępu uruchomiony, IP:', ap.ifconfig()[0])
+
+# Kod Licznika PWM
 _conditions = {"FREE": 0x0, "GATED": 0x1, "EDGE_RISING": 0x2, "EDGE_FALLING": 0x3}
 
 class PWMCounter:
@@ -80,3 +102,40 @@ class WaterCounter:
             if not self.hourly_usage:
                 return 0
             return sum(self.hourly_usage) / len(self.hourly_usage)
+
+
+water_counter = WaterCounter()
+app = Microdot()
+
+@app.route('/log', methods=['POST'])
+def log(request):
+    data = request.json
+    ssid = data.get('ssid')
+    password = data.get('password')
+    
+    if ssid and password:
+        ap.active(False)
+        wlan = network.WLAN(network.STA_IF)
+        wlan.active(True)
+        wlan.connect(ssid, password)
+        while not wlan.isconnected():
+            time.sleep(1)
+
+        ip_address = wlan.ifconfig()[0]
+        return {'status': 'Połączono', 'ip_address': ip_address}, 200
+    else:
+        return {'error': 'Brak ssid lub hasła'}, 400
+
+@app.route('/water_usage')
+def get_water_usage(request):
+    return {'water_usage': water_counter.water_usage()}
+
+@app.route('/water_used')
+def get_water_used(request):
+    return {'water_used': water_counter.water_used()}
+
+@app.route('/average_usage_last_12_hours')
+def get_average_usage_last_12_hours(request):
+    return {'average_usage_last_12_hours': water_counter.average_usage_last_12_hours()}
+
+app.run(host='0.0.0.0', port=80)
